@@ -1,9 +1,11 @@
+import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import logging
-import os
 from elevenlabs.client import ElevenLabs
+from pymongo import MongoClient
+from bson.binary import Binary
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -11,9 +13,8 @@ app = FastAPI()
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
-# Retrieve the API key (normally you would get this from an environment variable for security)
+# Retrieve the API key from environment variables
 api_key = os.getenv("ELEVEN_API_KEY")
-
 if not api_key:
     raise ValueError("API key not found. Please set the ELEVEN_API_KEY environment variable.")
 
@@ -23,6 +24,21 @@ try:
     logging.info("ElevenLabs client initialized successfully.")
 except Exception as e:
     logging.error(f"Failed to initialize ElevenLabs client: {e}")
+    raise
+
+# Retrieve MongoDB connection details from environment variables
+mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mongo_db_name = os.getenv("MONGO_DB_NAME", "audio_database")
+mongo_collection_name = os.getenv("MONGO_COLLECTION_NAME", "audio_files")
+
+# Initialize MongoDB client
+try:
+    mongo_client = MongoClient(mongo_uri)
+    mongo_db = mongo_client[mongo_db_name]
+    mongo_collection = mongo_db[mongo_collection_name]
+    logging.info("Connected to MongoDB successfully.")
+except Exception as e:
+    logging.error(f"Failed to connect to MongoDB: {e}")
     raise
 
 # Model for the request body
@@ -50,13 +66,17 @@ async def generate_audio(request: TextToSpeechRequest):
         audio_bytes = b''.join(audio_generator)
         logging.info("Audio generator successfully converted to bytes.")
 
-        # Save the generated audio to a file (you can modify this part to return the audio as a response)
-        audio_file_path = "output_audio.wav"
-        with open(audio_file_path, "wb") as audio_file:
-            audio_file.write(audio_bytes)
+        # Store the generated audio in MongoDB
+        audio_data = {
+            "text": request.text,
+            "voice": request.voice,
+            "model": request.model,
+            "audio": Binary(audio_bytes)
+        }
+        result = mongo_collection.insert_one(audio_data)
 
-        logging.info(f"Audio successfully saved to {audio_file_path}")
-        return {"message": "Audio successfully generated and saved."}
+        logging.info(f"Audio successfully stored in MongoDB with id {result.inserted_id}")
+        return {"message": "Audio successfully generated and stored in MongoDB.", "id": str(result.inserted_id)}
 
     except Exception as e:
         logging.error(f"Failed to generate audio: {e}")
